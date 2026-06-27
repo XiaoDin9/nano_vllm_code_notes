@@ -11,7 +11,9 @@ from nanovllm.layers.sampler import Sampler
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
 
-
+# scheduler: 选出本步要执行的请求数
+# BlockManager: 分配 kv cache 的物理块
+# ModelRuner: 输入转换成模型的格式 -> 执行前向传播 -> 采样得到下一个 token
 class ModelRunner:
 
     def __init__(self, config: Config, rank: int, event: Event | list[Event]):
@@ -102,6 +104,7 @@ class ModelRunner:
         self.run(seqs, True)
         torch.cuda.empty_cache()
 
+    # 这个计算考虑了模型权重，激活值峰值等其它显存占用，只把剩余部分分给 kv cache
     def allocate_kv_cache(self):
         config = self.config
         hf_config = config.hf_config
@@ -109,22 +112,26 @@ class ModelRunner:
         used = total - free
         peak = torch.cuda.memory_stats()["allocated_bytes.all.peak"]
         current = torch.cuda.memory_stats()["allocated_bytes.all.current"]
+
+        # tp 拆分，分到每个 gpu 的头数
         num_kv_heads = hf_config.num_key_value_heads // self.world_size
         head_dim = getattr(hf_config, "head_dim",  hf_config.hidden_size // hf_config.num_attention_heads)
-                          
-        block_bytes = 2 * hf_config.num_hidden_layers * \
-            self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
 
+        # 每 block 占用的字节数, [2, L, 1, S, H, D], S: block_size
+        block_bytes = 2 * hf_config.num_hidden_layers * self.block_size * num_kv_heads * head_dim * hf_config.dtype.itemsize
+
+        # 可用显存 = 总量 x 利用率 - 已用 - (峰值 - 当前)
         config.num_kvcache_blocks = int(total * config.gpu_memory_utilization - used - peak + current) // block_bytes
         assert config.num_kvcache_blocks > 0
-        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, 
-                                    config.num_kvcache_blocks, 
-                                    self.block_size, num_kv_heads, head_dim)
+
+        # kv cache shape: [2, L, N, S, H, D], S: block_size, N: num_kvcache_blocks
+        self.kv_cache = torch.empty(2, hf_config.num_hidden_layers, config.num_kvcache_blocks, self.block_size, num_kv_heads, head_dim)
+
         layer_id = 0
         for module in self.model.modules():
             if hasattr(module, "k_cache") and hasattr(module, "v_cache"):
-                module.k_cache = self.kv_cache[0, layer_id]
-                module.v_cache = self.kv_cache[1, layer_id]
+                module.k_cache = self.kv_cache[0, layer_id]                     # 第 layer_id 层的 k_cache 
+                module.v_cache = self.kv_cache[1, layer_id]                     # 第 layer_id 层的 v_cache
                 layer_id += 1
 
     def prepare_block_tables(self, seqs: list[Sequence]):
