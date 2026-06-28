@@ -13,7 +13,7 @@ def apply_rotary_emb(
     y2 = x2 * cos + x1 * sin
     return torch.cat((y1, y2), dim=-1).to(x.dtype)
 
-
+# RoPE 通常作用在：最后一个维度 D（head_dim）
 class RotaryEmbedding(nn.Module):
 
     def __init__(
@@ -24,8 +24,13 @@ class RotaryEmbedding(nn.Module):
         base: float,
     ) -> None:
         super().__init__()
-        self.head_size = head_size
+        self.head_size = head_size          # head_dim
         assert rotary_dim == head_size
+
+        # torch.arange(start, end, step, dtype) 函数: 生成一个从 start 到 end（不包括 end）的等差数列
+        # 假设 head_dim = D，将其拆成二维对：(x0, x1), (x2, x3), ..., (xD-2, xD-1)，
+        # [[x0, x1], [x2, x3], ... ,[xD-2, xD-1]], i 作为 2D 数组的额行索引，范围：[0, (D-2)/2]
+        # inv_freq(i) = 1 / (base ** (2i / D)), 2i 的索引列表为: [0, 2,4,..., D-2]
         inv_freq = 1.0 / (base**(torch.arange(0, rotary_dim, 2, dtype=torch.float) / rotary_dim))
         t = torch.arange(max_position_embeddings, dtype=torch.float)
         freqs = torch.einsum("i,j -> ij", t, inv_freq)
