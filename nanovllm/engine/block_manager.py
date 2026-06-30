@@ -9,9 +9,9 @@ class Block:
 
     def __init__(self, block_id):
         self.block_id = block_id
-        self.ref_count = 0                      # 引用计数（支持块共享，多个请求如果有相同的 prefix，可以共享同一个块）
-        self.hash = -1                          # 链式哈希值, -1 表示未定稿（用于 prefix cache, 满块才计算哈希，未满的块（开放块）hash 为 -1）
-        self.token_ids = []                     # 块内的 token （用于校验），用于hash 碰撞时的内容校验
+        self.ref_count = 0        # 引用计数（支持块共享，多个请求如果有相同的 prefix，可以共享同一个块）
+        self.hash = -1            # 链式哈希值, -1 表示未定稿（用于 prefix cache, 满块才计算哈希，未满的块（开放块）hash 为 -1）
+        self.token_ids = []       # 块内的 token （用于校验），用于hash 碰撞时的内容校验
 
     def update(self, hash: int, token_ids: list[int]):
         self.hash = hash
@@ -57,7 +57,9 @@ class BlockManager:
         self.used_block_ids.add(block_id)
         return block_id
 
-    # 块回收, notes: (1) 这里没有清空 hash_to_block_id; (2) 回收也仅仅是把 block_id 从 used 移动 free 队列，实际 block 中的数据都还在
+    # 块回收, notes:
+    # (1) 这里没有清空 hash_to_block_id; 
+    # (2) 回收也仅仅是把 block_id 从 used 移动 free 队列，实际 block 中的数据都还在
     def _deallocate_block(self, block_id: int):
         assert self.blocks[block_id].ref_count == 0     # 只有当前 block 的引用计数==0，才可以被回收
         self.used_block_ids.remove(block_id)
@@ -90,7 +92,8 @@ class BlockManager:
         return num_cached_blocks
 
     # eg: seq 包含 256 x 2 + 70 个token, 即 3 个 num_blocks, 
-    # 逻辑内存排布: block0(t0 ~ t255) -> block1(t255 ~ 510) -> block2(510 ~ 580)，假设其中 block0 是缓存命中的块，即: num_cached_blocks = 1
+    # 逻辑内存排布: block0(t0 ~ t255) -> block1(t255 ~ 510) -> block2(510 ~ 580)，
+    # 假设其中 block0 是缓存命中的块，即: num_cached_blocks = 1
     def allocate(self, seq: Sequence, num_cached_blocks: int):
         assert not seq.block_table          # 确保这个 sequence 还没有分配过 KV Cache block
         h = -1

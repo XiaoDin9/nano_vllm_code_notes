@@ -47,12 +47,14 @@ class Scheduler:
                 num_cached_blocks = self.block_manager.can_allocate(seq)
                 if num_cached_blocks == -1:     # 没有足够的 kv cache 块时， num_cached_blocks == -1
                     break
-                num_tokens = seq.num_tokens - num_cached_blocks * self.block_size
+                num_tokens = seq.num_tokens - num_cached_blocks * self.block_size   # 当前序列 seq 需要推理的 token 数量
             else:
-                num_tokens = seq.num_tokens - seq.num_cached_tokens                    # prefix cache 命中的部分不需要重新计算，只计入实际要处理的 token 数
+                # prefix cache 命中的部分不需要重新计算，只计入实际要处理的 token 数
+                num_tokens = seq.num_tokens - seq.num_cached_tokens  
 
             # eg: 假设 self.max_num_batched_tokens == 8k， seq0.num_tokens == 4k, 当前序列 seq1.num_tokens == 4.1k
-            # scheduled_seqs[seq0], num_batched_tokens = 4k （seq0 的tokens), remainning 只剩下 4k, 不够保存当前 seq1 的所有 token 了, 因此本 batch 不包含 seq1
+            # scheduled_seqs[seq0], num_batched_tokens = 4k （seq0 的tokens), remainning 只剩下 4k, 
+            # 不够保存当前 seq1 的所有 token 了, 因此本 batch 不包含 seq1
             # only allow chunked prefill for the first seq
             if remaining < num_tokens and scheduled_seqs:  
                 break
@@ -60,11 +62,12 @@ class Scheduler:
             if not seq.block_table:
                 self.block_manager.allocate(seq, num_cached_blocks)
 
-            seq.num_scheduled_tokens = min(num_tokens, remaining)                       # chunked prefill for the first seq
+            seq.num_scheduled_tokens = min(num_tokens, remaining) # chunked prefill for the first seq
             num_batched_tokens += seq.num_scheduled_tokens
 
             # chunked prefill for the first seq
-            # eg0: self.max_num_batched_tokens == 4k， seq0.num_tokens == 4.1k, seq0.num_scheduled_tokens == 4k, seq0 还剩下 0.1k token 没有处理
+            # eg0: self.max_num_batched_tokens == 4k， seq0.num_tokens == 4.1k, seq0.num_scheduled_tokens == 4k, 
+            # seq0 还剩下 0.1k token 没有处理
             # 此时 seq0 还不能从 self.waiting 队列中弹出，还一轮还要继续执行 seq0 的 0.1k token
             if seq.num_cached_tokens + seq.num_scheduled_tokens == seq.num_tokens:
                 seq.status = SequenceStatus.RUNNING
@@ -102,7 +105,7 @@ class Scheduler:
         seq.status = SequenceStatus.WAITING
         seq.is_prefill = True
         self.block_manager.deallocate(seq)
-        self.waiting.appendleft(seq)                            # 放入是队首，保证了公平性，不会让一个请求被反复抢占而饿死
+        self.waiting.appendleft(seq)         # 放入是队首，保证了公平性，不会让一个请求被反复抢占而饿死
 
     def postprocess(self, seqs: list[Sequence], token_ids: list[int], is_prefill: bool):
         for seq, token_id in zip(seqs, token_ids):

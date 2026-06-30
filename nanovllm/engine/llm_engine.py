@@ -47,10 +47,17 @@ class LLMEngine:
         self.scheduler.add(seq)
 
     def step(self):
+        # 调度选出本batch要执行的请求
         seqs, is_prefill = self.scheduler.schedule()
+        # 本batch 执行的 token 数，prefill 阶段是所有 req 的 num_scheduled_tokens 之和，decode 是每个 seq 输入1个token
         num_tokens = sum(seq.num_scheduled_tokens for seq in seqs) if is_prefill else -len(seqs)
+        
+        # 开始进行模型推理
         token_ids = self.model_runner.call("run", seqs, is_prefill)
+
+        # 对 token_ids 进行后处理
         self.scheduler.postprocess(seqs, token_ids, is_prefill)
+        
         outputs = [(seq.seq_id, seq.completion_token_ids) for seq in seqs if seq.is_finished]
         return outputs, num_tokens
 
@@ -66,8 +73,10 @@ class LLMEngine:
         pbar = tqdm(total=len(prompts), desc="Generating", dynamic_ncols=True, disable=not use_tqdm)
         if not isinstance(sampling_params, list):
             sampling_params = [sampling_params] * len(prompts)
+            
         for prompt, sp in zip(prompts, sampling_params):
             self.add_request(prompt, sp)
+
         outputs = {}
         prefill_throughput = decode_throughput = 0.
         while not self.is_finished():
@@ -77,14 +86,18 @@ class LLMEngine:
                 prefill_throughput = num_tokens / (perf_counter() - t)
             else:
                 decode_throughput = -num_tokens / (perf_counter() - t)
+            
             pbar.set_postfix({
                 "Prefill": f"{int(prefill_throughput)}tok/s",
                 "Decode": f"{int(decode_throughput)}tok/s",
             })
+
             for seq_id, token_ids in output:
                 outputs[seq_id] = token_ids
                 pbar.update(1)
+
         pbar.close()
+
         outputs = [outputs[seq_id] for seq_id in sorted(outputs.keys())]
         outputs = [{"text": self.tokenizer.decode(token_ids), "token_ids": token_ids} for token_ids in outputs]
         return outputs
